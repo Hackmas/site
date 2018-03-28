@@ -83,10 +83,10 @@
         "fields": {
             "key": "status",
             "label": "Status",
-            "level": 1,
+            "level": 0,
             "lft": 2,
             "order": 7,
-            "parent": 6,
+            "parent": null,
             "path": "/status/",
             "regex": "^/status/$|^/judge/",
             "rght": 3,

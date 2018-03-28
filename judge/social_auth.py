@@ -16,11 +16,47 @@ from social_core.backends.github import GithubOAuth2
 from social_core.exceptions import InvalidEmail, SocialAuthBaseException
 from social_core.pipeline.partial import partial
 
+from social_core.backends.base import BaseAuth
+from social_core.exceptions import AuthException
+
 from judge.forms import ProfileForm
 from judge.models import Profile, Language
 
 logger = logging.getLogger('judge.social_auth')
 
+class UnicornAuth(BaseAuth):
+    
+    name = 'unicorn'
+    REQUIRES_EMAIL_VALIDATION=False
+    ID_KEY=None
+    EXTRA_DATA=[
+            ('x-zoodoo-token','sso'),
+            ('token','token')]
+
+    
+    AUTHORIZATION_URL='https://competitions.gathering.org/sso/tgpc'
+    USER_URL='https://competitions.gathering.org/api/profile'
+
+    def get_user_details(self, response):
+        return {'username':response.get('uid'),
+                'email':response.get('email') }
+
+    def user_data(self, access_token, *args,**kwargs):
+        payload='X-Zoodo-API-Token:SSO:{0}:{1}:{2}:{3}:'.format(token, uid, sid, sesh)
+        stuff=requests.post(USER_URL, payload)
+
+
+    def get_data(self, request):
+        #X-Zoodo-API-Token: SSO:<api_token>:<uid>:<sid>:<hash>
+        
+        user=request.GET.get('uid')
+        session_id=request.GET.get('sid')
+        session_hash=request.GET.get('hash')
+        role=request.GET.get('role')
+
+        resp=requests.get(profileurl,params='{X-Zoodoo-APi-token:SSO:{0}:{1}:{2}:{3}}'.format(TOKEN,user, session_id, session_hash)) 
+        return resp
+        
 
 class GitHubSecureEmailOAuth2(GithubOAuth2):
     name = 'github-secure'
@@ -84,6 +120,8 @@ def make_profile(backend, user, response, is_new=False, *args, **kwargs):
         if not hasattr(user, 'profile'):
             profile = Profile(user=user)
             profile.language = Language.get_python2()
+            if backend.name == 'unicorn':
+                profile.name=response['uid']
             if backend.name == 'google-oauth2':
                 profile.name = response['displayName']
             elif backend.name in ('github', 'facebook') and 'name' in response:

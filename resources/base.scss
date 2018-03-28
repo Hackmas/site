@@ -223,9 +223,6 @@ header {
 
 #nav-container {
     background: $widget_black;
-
-    // opacity: 0.77
-    // filter: alpha(opacity=77)
     height: 100%;
 }
 
@@ -261,14 +258,8 @@ nav {
             position: relative;
 
             &.home-nav-element a {
-                padding: 0;
+                padding: 0.3rem;
                 height: 44px;
-
-                &:hover {
-                    border-bottom: none;
-                    padding-top: 0;
-                    padding-bottom: 0;
-                }
             }
 
             a, button {
@@ -344,12 +335,11 @@ nav {
                 display: block !important;
             }
 
-            &.home-nav-element a:hover {
-                border-bottom: 0;
-                padding-top: 0;
-                padding-bottom: 0;
-                background: transparent;
-            }
+            //&.home-nav-element a:hover {
+            //    padding-top: 0;
+            //    padding-bottom: 0;
+            //    background: transparent;
+            //}
         }
     }
 
