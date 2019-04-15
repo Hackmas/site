@@ -8,7 +8,7 @@ from django.contrib.auth.views import SuccessURLAllowedHostsMixin
 from django.http import HttpResponseBadRequest, HttpResponseRedirect
 from django.urls import reverse
 from django.utils.http import is_safe_url
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.views.generic import FormView
 from io import BytesIO
 
@@ -82,7 +82,7 @@ class TOTPEnableView(TOTPView):
         image = qr.make_image(fill_color='black', back_color='white')
         buf = BytesIO()
         image.save(buf, format='PNG')
-        return 'data:image/png;base64,' + base64.b64encode(buf.getvalue())
+        return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
 
 
 class TOTPDisableView(TOTPView):
@@ -100,7 +100,7 @@ class TOTPDisableView(TOTPView):
 
 
 class TOTPLoginView(SuccessURLAllowedHostsMixin, TOTPView):
-    title = _('Perform Two Factor Authetication')
+    title = _('Perform Two Factor Authentication')
     template_name = 'registration/totp_auth.html'
 
     def check_skip(self):

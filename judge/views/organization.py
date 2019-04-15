@@ -1,18 +1,18 @@
 from itertools import chain
 
 from django import forms
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.cache.utils import make_template_fragment_key
 from django.core.exceptions import PermissionDenied
-from django.core.urlresolvers import reverse
 from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.forms import Form, modelformset_factory
 from django.http import Http404, HttpResponseRedirect, HttpResponsePermanentRedirect
-from django.shortcuts import get_object_or_404
-from django.utils.translation import ugettext as _, ugettext_lazy, ungettext
+from django.urls import reverse
+from django.utils.translation import gettext as _, gettext_lazy, ungettext
 from django.views.generic import DetailView, ListView, View, UpdateView, FormView
 from django.views.generic.detail import SingleObjectMixin, SingleObjectTemplateResponseMixin
 from reversion import revisions
@@ -66,7 +66,7 @@ class OrganizationList(TitleMixin, ListView):
     model = Organization
     context_object_name = 'organizations'
     template_name = 'organization/list.html'
-    title = ugettext_lazy('Organizations')
+    title = gettext_lazy('Organizations')
 
     def get_queryset(self):
         return super(OrganizationList, self).get_queryset().annotate(member_count=Count('member'))
@@ -90,10 +90,13 @@ class OrganizationUsers(OrganizationDetailView):
         context['title'] = _('%s Members') % self.object.name
         context['users'] = ranker(chain(*[
             i.select_related('user').defer('about') for i in (
-                self.object.members.filter(submission__points__gt=0).order_by('-performance_points')
+                self.object.members.filter(submission__points__gt=0, is_unlisted=False)
+                    .order_by('-performance_points')
                     .annotate(problems=Count('submission__problem', distinct=True)),
-                self.object.members.annotate(problems=Max('submission__points')).filter(problems=0),
-                self.object.members.annotate(problems=Count('submission__problem', distinct=True)).filter(problems=0),
+                self.object.members.filter(is_unlisted=False)
+                                   .annotate(problems=Max('submission__points')).filter(problems=0),
+                self.object.members.filter(is_unlisted=False)
+                                   .annotate(problems=Count('submission__problem', distinct=True)).filter(problems=0),
             )
         ]))
         context['partial'] = True
@@ -118,8 +121,14 @@ class JoinOrganization(OrganizationMembershipChange):
     def handle(self, request, org, profile):
         if profile.organizations.filter(id=org.id).exists():
             return generic_message(request, _('Joining organization'), _('You are already in the organization.'))
+
         if not org.is_open:
             return generic_message(request, _('Joining organization'), _('This organization is not open.'))
+
+        max_orgs = getattr(settings, 'DMOJ_USER_MAX_ORGANIZATION_COUNT', 3)
+        if profile.organizations.filter(is_open=True).count() >= max_orgs:
+            return generic_message(request, _('Joining organization'), _('You may not be part of more than {count} public organizations.').format(count=max_orgs))
+
         profile.organizations.add(org)
         profile.save()
         cache.delete(make_template_fragment_key('org_member_count', (org.id,)))
@@ -170,7 +179,7 @@ class RequestJoinOrganization(LoginRequiredMixin, SingleObjectMixin, FormView):
 class OrganizationRequestDetail(LoginRequiredMixin, TitleMixin, DetailView):
     model = OrganizationRequest
     template_name = 'organization/requests/detail.html'
-    title = ugettext_lazy('Join request detail')
+    title = gettext_lazy('Join request detail')
     pk_url_kwarg = 'rpk'
 
     def get_object(self, queryset=None):

@@ -139,6 +139,13 @@
         {% if not problem.is_manually_managed %}
             <div><a href="{{ url('problem_data', problem.code) }}">{{ _('Edit test data') }}</a></div>
         {% endif %}
+    {% elif request.user.is_authenticated and has_tickets %}
+        <hr>
+        <div>
+            <a href="{{ url('problem_ticket_list', problem.code) }}">{{ _('My tickets') }}
+                {% if num_open_tickets %}<span class="badge">{{ num_open_tickets }}</span>{% endif %}
+            </a>
+        </div>
     {% endif %}
 
     {% if perms.judge.clone_problem %}
@@ -224,7 +231,7 @@
             <div class="toggle open unselectable">
                 <i class="fa fa-chevron-right fa-fw"></i>{{ _('Allowed languages') }}
             </div>
-            <div style="margin-bottom:-1em" class="toggled">
+            <div class="toggled">
                 {% with usable=problem.usable_common_names, langs=problem.languages_list() %}
                     {% for lang in langs %}
                         {%- if lang in usable -%}
@@ -280,9 +287,9 @@
 {% endblock %}
 
 {% block post_description_end %}
-    {% if request.user.is_authenticated and not request.user.profile.mute %}
+    {% if request.user.is_authenticated and not request.profile.mute %}
         <a href="{{ url('new_problem_ticket', problem.code) }}" class="button clarify">
-            {%- if contest_problem and contest_problem.contest.use_clarifications -%}
+            {%- if contest_problem and contest_problem.contest.use_clarifications and request.profile.current_contest.live -%}
                 {{ _('Request clarification') }}
             {%- else -%}
                 {{ _('Report an issue') }}

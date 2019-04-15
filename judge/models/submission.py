@@ -3,15 +3,17 @@ import hmac
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
-from django.core.urlresolvers import reverse
 from django.db import models
+from django.urls import reverse
 from django.utils.functional import cached_property
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from judge.judgeapi import judge_submission, abort_submission
 from judge.models.problem import Problem, TranslatedProblemForeignKeyQuerySet
 from judge.models.profile import Profile
 from judge.models.runtime import Language
+from judge.utils.unicode import utf8bytes
+
 
 __all__ = ['SUBMISSION_RESULT', 'Submission', 'SubmissionTestCase']
 
@@ -119,6 +121,22 @@ class Submission(models.Model):
 
     abort.alters_data = True
 
+    def update_contest(self):
+        try:
+            contest = self.contest
+        except AttributeError:
+            return
+
+        contest_problem = contest.problem
+        contest.points = round(self.case_points / self.case_total * contest_problem.points
+                               if self.case_total > 0 else 0, 3)
+        if not contest_problem.partial and contest.points != contest_problem.points:
+            contest.points = 0
+        contest.save()
+        contest.participation.recompute_results()
+
+    update_contest.alters_data = True
+
     @property
     def is_graded(self):
         return self.status not in ('QU', 'P', 'G')
@@ -128,7 +146,7 @@ class Submission(models.Model):
         if hasattr(self, 'contest'):
             return self.contest.participation.contest.key
 
-    def __unicode__(self):
+    def __str__(self):
         return u'Submission %d of %s by %s' % (self.id, self.problem, self.user.user.username)
 
     def get_absolute_url(self):
@@ -143,7 +161,7 @@ class Submission(models.Model):
 
     @classmethod
     def get_id_secret(cls, sub_id):
-        return (hmac.new(settings.EVENT_DAEMON_SUBMISSION_KEY, str(sub_id), hashlib.sha512).hexdigest()[:16] +
+        return (hmac.new(utf8bytes(settings.EVENT_DAEMON_SUBMISSION_KEY), b'%d' % sub_id, hashlib.sha512).hexdigest()[:16] +
                 '%08x' % sub_id)
 
     @cached_property
@@ -175,6 +193,7 @@ class SubmissionTestCase(models.Model):
     total = models.FloatField(verbose_name=_('points possible'), null=True)
     batch = models.IntegerField(verbose_name=_('batch number'), null=True)
     feedback = models.CharField(max_length=50, verbose_name=_('judging feedback'), blank=True)
+    extended_feedback = models.TextField(verbose_name=_('extended judging feedback'), blank=True)
     output = models.TextField(verbose_name=_('program output'), blank=True)
 
     @property

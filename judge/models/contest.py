@@ -1,14 +1,16 @@
 from operator import itemgetter
 
 from django.core.exceptions import ValidationError
-from django.core.urlresolvers import reverse
 from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Max
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.utils.translation import ugettext_lazy as _, ugettext
+from django.utils.translation import gettext_lazy as _, gettext
+from jsonfield import JSONField
 
+from judge import contest_format
 from judge.models.problem import Problem
 from judge.models.profile import Profile, Organization
 from judge.models.submission import Submission
@@ -24,7 +26,7 @@ class ContestTag(models.Model):
     color = models.CharField(max_length=7, verbose_name=_('tag colour'), validators=[color_validator])
     description = models.TextField(verbose_name=_('tag description'), blank=True)
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def get_absolute_url(self):
@@ -34,9 +36,9 @@ class ContestTag(models.Model):
     def text_color(self, cache={}):
         if self.color not in cache:
             if len(self.color) == 4:
-                r, g, b = [ord((i * 2).decode('hex')) for i in self.color[1:]]
+                r, g, b = [ord(bytes.fromhex(i * 2)) for i in self.color[1:]]
             else:
-                r, g, b = [ord(i) for i in self.color[1:].decode('hex')]
+                r, g, b = [i for i in bytes.fromhex(self.color[1:])]
             cache[self.color] = '#000' if 299 * r + 587 * g + 144 * b > 140000 else '#fff'
         return cache[self.color]
 
@@ -93,10 +95,27 @@ class Contest(models.Model):
     access_code = models.CharField(verbose_name=_('access code'), blank=True, default='', max_length=255,
                                    help_text=_('An optional code to prompt contestants before they are allowed '
                                                'to join the contest. Leave it blank to disable.'))
+    banned_users = models.ManyToManyField(Profile, verbose_name=_('personae non gratae'), blank=True,
+                                          help_text=_('Bans the selected users from joining this contest.'))
+    format_name = models.CharField(verbose_name=_('contest format'), default='default', max_length=32,
+                                   choices=contest_format.choices(), help_text=_('The contest format module to use.'))
+    format_config = JSONField(verbose_name=_('contest format configuration'), null=True, blank=True,
+                              help_text=_('A JSON object to serve as the configuration for the chosen contest format '
+                                          'module. Leave empty to use None. Exact format depends on the contest format '
+                                          'selected.'))
+
+    @cached_property
+    def format_class(self):
+        return contest_format.formats[self.format_name]
+
+    @cached_property
+    def format(self):
+        return self.format_class(self, self.format_config)
 
     def clean(self):
         if self.start_time >= self.end_time:
             raise ValidationError('What is this? A contest that ended before it starts?')
+        self.format_class.validate(self.format_config)
 
     def is_in_contest(self, request):
         if request.user.is_authenticated:
@@ -148,7 +167,7 @@ class Contest(models.Model):
     def ended(self):
         return self.end_time < self._now
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def get_absolute_url(self):
@@ -181,7 +200,7 @@ class Contest(models.Model):
 
         # If the user is a contest organizer
         if user.has_perm('judge.edit_own_contest') and \
-           self.organizers.filter(id=user.profile.id).exists():
+                self.organizers.filter(id=user.profile.id).exists():
             return True
 
         return False
@@ -208,14 +227,15 @@ class ContestParticipation(models.Model):
     cumtime = models.PositiveIntegerField(verbose_name=_('cumulative time'), default=0)
     virtual = models.IntegerField(verbose_name=_('virtual participation id'), default=0,
                                   help_text=_('0 means non-virtual, otherwise the n-th virtual participation'))
+    format_data = JSONField(verbose_name=_('contest format specific data'), null=True, blank=True)
 
-    def recalculate_score(self):
-        self.score = sum(map(itemgetter('points'),
-                             self.submissions.values('submission__problem').annotate(points=Max('points'))))
-        self.save()
-        return self.score
+    def recompute_results(self):
+        self.contest.format.update_participation(self)
+    recompute_results.alters_data = True
 
-    recalculate_score.alters_data = True
+    @property
+    def live(self):
+        return self.virtual == 0
 
     @property
     def spectate(self):
@@ -254,26 +274,12 @@ class ContestParticipation(models.Model):
         if end is not None and end >= self._now:
             return end - self._now
 
-    def update_cumtime(self):
-        cumtime = 0
-        for problem in self.contest.contest_problems.all():
-            solution = problem.submissions.filter(participation=self, points__gt=0) \
-                .values('submission__user_id').annotate(time=Max('submission__date'))
-            if not solution:
-                continue
-            dt = solution[0]['time'] - self.start
-            cumtime += dt.total_seconds()
-        self.cumtime = cumtime
-        self.save()
-
-    update_cumtime.alters_data = True
-
-    def __unicode__(self):
+    def __str__(self):
         if self.spectate:
-            return ugettext('%s spectating in %s') % (self.user.long_display_name, self.contest.name)
+            return gettext('%s spectating in %s') % (self.user.username, self.contest.name)
         if self.virtual:
-            return ugettext('%s in %s, v%d') % (self.user.long_display_name, self.contest.name, self.virtual)
-        return ugettext('%s in %s') % (self.user.long_display_name, self.contest.name)
+            return gettext('%s in %s, v%d') % (self.user.username, self.contest.name, self.virtual)
+        return gettext('%s in %s') % (self.user.username, self.contest.name)
 
     class Meta:
         verbose_name = _('contest participation')

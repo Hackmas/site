@@ -6,7 +6,6 @@ from django.shortcuts import get_object_or_404
 
 from dmoj import settings
 from judge.models import Contest, ContestParticipation, ContestTag, Problem, Profile, Submission
-from judge.views.contests import base_contest_ranking_list
 
 
 def sane_time_repr(delta):
@@ -25,7 +24,7 @@ def api_v1_contest_list(request):
         'start_time': c.start_time.isoformat(),
         'end_time': c.end_time.isoformat(),
         'time_limit': c.time_limit and sane_time_repr(c.time_limit),
-        'labels': map(attrgetter('name'), c.tag_list),
+        'labels': list(map(attrgetter('name'), c.tag_list)),
     } for c in queryset})
 
 
@@ -38,15 +37,28 @@ def api_v1_contest_detail(request, contest):
         can_see_rankings = False
 
     problems = list(contest.contest_problems.select_related('problem')
-                    .defer('problem__description').order_by('order')) if in_contest else []
-    users = base_contest_ranking_list(contest, problems, contest.users.filter(virtual=0)
-                                      .prefetch_related('user__organizations')
-                                      .order_by('-score', 'cumtime')) if can_see_rankings else []
+                    .defer('problem__description').order_by('order'))
+    participations = (contest.users.filter(virtual=0, user__is_unlisted=False)
+                      .prefetch_related('user__organizations')
+                      .annotate(username=F('user__user__username'))
+                      .order_by('-score', 'cumtime') if can_see_rankings else [])
+
+    if not (in_contest or contest.ended or request.user.is_superuser
+            or (request.user.is_authenticated and contest.organizers.filter(id=request.profile.id).exists())):
+        problems = []
+
     return JsonResponse({
         'time_limit': contest.time_limit and contest.time_limit.total_seconds(),
         'start_time': contest.start_time.isoformat(),
         'end_time': contest.end_time.isoformat(),
         'tags': list(contest.tags.values_list('name', flat=True)),
+        'is_rated': contest.is_rated,
+        'rate_all': contest.is_rated and contest.rate_all,
+        'has_rating': contest.ratings.exists(),
+        'format': {
+            'name': contest.format_name,
+            'config': contest.format_config,
+        },
         'problems': [
             {
                 'points': int(problem.points),
@@ -56,14 +68,11 @@ def api_v1_contest_detail(request, contest):
             } for problem in problems],
         'rankings': [
             {
-                'user': user.user.username,
-                'points': user.points,
-                'cumtime': user.cumtime,
-                'solutions': [{
-                                  'points': int(sol.points),
-                                  'time': sol.time.total_seconds()
-                              } if sol else None for sol in user.problems]
-            } for user in users]
+                'user': participation.username,
+                'points': participation.score,
+                'cumtime': participation.cumtime,
+                'solutions': contest.format.get_problem_breakdown(participation, problems)
+            } for participation in participations]
     })
 
 
@@ -102,12 +111,11 @@ def api_v1_problem_info(request, problem):
 
 
 def api_v1_user_list(request):
-    queryset = Profile.objects.values_list('user__username', 'name', 'points', 'display_rank')
+    queryset = Profile.objects.filter(is_unlisted=False).values_list('user__username', 'points', 'display_rank')
     return JsonResponse({username: {
-        'display_name': name,
         'points': points,
         'rank': rank
-    } for username, name, points, rank in queryset})
+    } for username, points, rank in queryset})
 
 
 def api_v1_user_info(request, user):
@@ -115,7 +123,6 @@ def api_v1_user_info(request, user):
     submissions = list(Submission.objects.filter(case_points=F('case_total'), user=profile, problem__is_public=True, problem__is_organization_private=False)
                        .values('problem').distinct().values_list('problem__code', flat=True))
     resp = {
-        'display_name': profile.name,
         'points': profile.points,
         'rank': profile.display_rank,
         'solved_problems': submissions,
@@ -125,12 +132,13 @@ def api_v1_user_info(request, user):
     last_rating = profile.ratings.last()
 
     contest_history = {}
-    for contest_key, rating, volatility in ContestParticipation.objects.filter(user=profile, virtual=0, contest__is_public=True, contest__is_private=False) \
-                                                               .values_list('contest__key', 'rating__rating', 'rating__volatility'):
-        contest_history[contest_key] = {
-            'rating': rating,
-            'volatility': volatility,
-        }
+    if not profile.is_unlisted:
+        for contest_key, rating, volatility in ContestParticipation.objects.filter(user=profile, virtual=0, contest__is_public=True, contest__is_private=False) \
+                                                                   .values_list('contest__key', 'rating__rating', 'rating__volatility'):
+            contest_history[contest_key] = {
+                'rating': rating,
+                'volatility': volatility,
+            }
 
     resp['contests'] = {
         'current_rating': last_rating.rating if last_rating else None,

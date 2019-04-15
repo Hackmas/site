@@ -10,7 +10,7 @@ from django.forms import ModelForm
 from django.http import HttpResponseForbidden, HttpResponseNotFound, HttpResponseRedirect
 from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.views.generic import View
 from django.views.generic.base import TemplateResponseMixin
 from django.views.generic.detail import SingleObjectMixin
@@ -117,6 +117,6 @@ class CommentedDetailView(TemplateResponseMixin, SingleObjectMixin, View):
             context['is_new_user'] = (not self.request.user.is_staff and
                                       not profile.submission_set.filter(points=F('problem__points')).exists())
         context['comment_list'] = queryset
-        context['vote_hide_threshold'] = getattr(settings, 'COMMENT_VOTE_HIDE_THRESHOLD', -5)
+        context['vote_hide_threshold'] = getattr(settings, 'DMOJ_COMMENT_VOTE_HIDE_THRESHOLD', -5)
 
         return context

@@ -1,5 +1,3 @@
-from __future__ import division
-
 import itertools
 import logging
 import os
@@ -11,18 +9,18 @@ from random import randrange
 from django.conf import settings
 from django.contrib.auth.decorators import login_required, permission_required
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
-from django.core.urlresolvers import reverse
 from django.db import IntegrityError
 from django.db.models import Count, Q, F, Prefetch
 from django.db.utils import ProgrammingError
 from django.http import Http404, HttpResponseRedirect, HttpResponse, HttpResponseForbidden
 from django.shortcuts import render, get_object_or_404
 from django.template.loader import get_template
+from django.urls import reverse
 from django.utils import translation, timezone
 from django.utils.functional import cached_property
 from django.utils.html import format_html, escape
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext as _, ugettext_lazy
+from django.utils.translation import gettext as _, gettext_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import ListView, View
 from django.views.generic.base import TemplateResponseMixin
@@ -39,6 +37,7 @@ from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import contest_completed_ids, user_completed_ids, contest_attempted_ids, user_attempted_ids, \
     hot_problems
 from judge.utils.strings import safe_int_or_none, safe_float_or_none
+from judge.utils.tickets import own_ticket_filter
 from judge.utils.views import TitleMixin, generic_message, QueryStringSortMixin
 
 
@@ -172,15 +171,24 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
             context['clarifications'] = clarifications.order_by('-date')
             context['submission_limit'] = contest_problem.max_submissions
             if contest_problem.max_submissions:
-                context['submissions_left'] = max(contest_problem.max_submissions - get_contest_submission_count(self.object.code, user.profile), 0)
+                context['submissions_left'] = max(contest_problem.max_submissions -
+                                                  get_contest_submission_count(self.object.code, user.profile), 0)
 
         context['available_judges'] = Judge.objects.filter(online=True, problems=self.object)
         context['show_languages'] = self.object.allowed_languages.count() != Language.objects.count()
         context['has_pdf_render'] = HAS_PDF
         context['completed_problem_ids'] = self.get_completed_problems()
         context['attempted_problems'] = self.get_attempted_problems()
-        context['num_open_tickets'] = self.object.tickets.filter(is_open=True).count()
-        context['can_edit_problem'] = self.object.is_editable_by(user)
+
+        can_edit = self.object.is_editable_by(user)
+        context['can_edit_problem'] = can_edit
+        if user.is_authenticated:
+            tickets = self.object.tickets
+            if not can_edit:
+                tickets = tickets.filter(own_ticket_filter(user.profile.id))
+            context['has_tickets'] = tickets.exists()
+            context['num_open_tickets'] = tickets.filter(is_open=True).count()
+
         try:
             context['editorial'] = Solution.objects.get(problem=self.object)
         except ObjectDoesNotExist:
@@ -228,8 +236,8 @@ class ProblemPdfView(ProblemMixin, SingleObjectMixin, View):
         except ProblemTranslation.DoesNotExist:
             trans = None
 
-        error_cache = os.path.join(settings.PROBLEM_PDF_CACHE, '%s.%s.log' % (problem.code, language))
-        cache = os.path.join(settings.PROBLEM_PDF_CACHE, '%s.%s.pdf' % (problem.code, language))
+        error_cache = os.path.join(settings.DMOJ_PDF_PROBLEM_CACHE, '%s.%s.log' % (problem.code, language))
+        cache = os.path.join(settings.DMOJ_PDF_PROBLEM_CACHE, '%s.%s.pdf' % (problem.code, language))
 
         if os.path.exists(error_cache):
             with open(error_cache) as f:
@@ -238,13 +246,15 @@ class ProblemPdfView(ProblemMixin, SingleObjectMixin, View):
         if not os.path.exists(cache):
             self.logger.info('Rendering: %s.%s.pdf', problem.code, language)
             with DefaultPdfMaker() as maker, translation.override(language):
+                problem_name = problem.name if trans is None else trans.name
                 maker.html = get_template('problem/raw.html').render({
                     'problem': problem,
-                    'problem_name': problem.name if trans is None else trans.name,
+                    'problem_name': problem_name,
                     'description': problem.description if trans is None else trans.description,
                     'url': request.build_absolute_uri(),
                     'math_engine': maker.math_engine,
                 }).replace('"//', '"https://').replace("'//", "'https://")
+                maker.title = problem_name
 
                 assets = ['style.css', 'pygment-github.css']
                 if maker.math_engine == 'jax':
@@ -260,8 +270,8 @@ class ProblemPdfView(ProblemMixin, SingleObjectMixin, View):
                 shutil.move(maker.pdffile, cache)
 
         response = HttpResponse()
-        if hasattr(settings, 'PROBLEM_PDF_INTERNAL') and request.META.get('SERVER_SOFTWARE', '').startswith('nginx/'):
-            response['X-Accel-Redirect'] = '%s/%s.%s.pdf' % (settings.PROBLEM_PDF_INTERNAL, problem.code, language)
+        if hasattr(settings, 'DMOJ_PDF_PROBLEM_INTERNAL') and request.META.get('SERVER_SOFTWARE', '').startswith('nginx/'):
+            response['X-Accel-Redirect'] = '%s/%s.%s.pdf' % (settings.DMOJ_PDF_PROBLEM_INTERNAL, problem.code, language)
         else:
             with open(cache, 'rb') as f:
                 response.content = f.read()
@@ -273,7 +283,7 @@ class ProblemPdfView(ProblemMixin, SingleObjectMixin, View):
 
 class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView):
     model = Problem
-    title = ugettext_lazy('Problems')
+    title = gettext_lazy('Problems')
     context_object_name = 'problems'
     template_name = 'problem/list.html'
     paginate_by = 50
@@ -334,9 +344,9 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
             .defer('problem__description').order_by('problem__code') \
             .annotate(user_count=Count('submission__participation', distinct=True)) \
             .order_by('order')
-        queryset = TranslatedProblemForeignKeyQuerySet.add_problem_i18n_name.im_func(queryset, 'i18n_name',
-                                                                                     self.request.LANGUAGE_CODE,
-                                                                                     'problem__name')
+        queryset = TranslatedProblemForeignKeyQuerySet.add_problem_i18n_name(queryset, 'i18n_name',
+                                                                             self.request.LANGUAGE_CODE,
+                                                                             'problem__name')
         return [{
             'id': p['problem_id'],
             'code': p['problem__code'],
@@ -459,7 +469,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
         self.category = safe_int_or_none(request.GET.get('category'))
         if 'type' in request.GET:
             try:
-                self.selected_types = map(int, request.GET.getlist('type'))
+                self.selected_types = list(map(int, request.GET.getlist('type')))
             except ValueError:
                 pass
 
@@ -606,7 +616,7 @@ def problem_submit(request, problem=None, submission=None):
             'problem': problem_object.translated_name(request.LANGUAGE_CODE),
         },
         'content_title': mark_safe(escape(_('Submit to %(problem)s')) % {
-            'problem': format_html(u'<a href="{0}">{1}</a>',
+            'problem': format_html('<a href="{0}">{1}</a>',
                                    reverse('problem_detail', args=[problem_object.code]),
                                    problem_object.translated_name(request.LANGUAGE_CODE))
         }),

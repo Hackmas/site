@@ -18,7 +18,7 @@ from django.utils import timezone
 from django.utils.formats import date_format
 from django.utils.functional import cached_property
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext as _, ugettext_lazy
+from django.utils.translation import gettext as _, gettext_lazy
 from django.views.generic import DetailView, ListView, TemplateView
 from reversion import revisions
 
@@ -29,6 +29,7 @@ from judge.ratings import rating_class, rating_progress
 from judge.utils.problems import contest_completed_ids, user_completed_ids
 from judge.utils.ranker import ranker
 from judge.utils.subscription import Subscription
+from judge.utils.unicode import utf8text
 from judge.utils.views import TitleMixin, generic_message, DiggPaginatorMixin, QueryStringSortMixin
 from .contests import contest_ranking_view
 
@@ -36,7 +37,7 @@ __all__ = ['UserPage', 'UserAboutPage', 'UserProblemsPage', 'users', 'edit_profi
 
 
 def remap_keys(iterable, mapping):
-    return [dict((mapping.get(k, k), v) for k, v in item.iteritems()) for item in iterable]
+    return [dict((mapping.get(k, k), v) for k, v in item.items()) for item in iterable]
 
 
 class UserMixin(object):
@@ -96,11 +97,11 @@ class UserPage(TitleMixin, UserMixin, DetailView):
         rating = self.object.ratings.order_by('-contest__end_time')[:1]
         context['rating'] = rating[0] if rating else None
 
-        context['rank'] = Profile.objects.filter(performance_points__gt=self.object.performance_points).count() + 1
+        context['rank'] = Profile.objects.filter(is_unlisted=False, performance_points__gt=self.object.performance_points).count() + 1
 
         if rating:
-            context['rating_rank'] = Profile.objects.filter(rating__gt=self.object.rating).count() + 1
-            context['rated_users'] = Profile.objects.filter(rating__isnull=False).count()
+            context['rating_rank'] = Profile.objects.filter(is_unlisted=False, rating__gt=self.object.rating).count() + 1
+            context['rated_users'] = Profile.objects.filter(is_unlisted=False, rating__isnull=False).count()
         context.update(self.object.ratings.aggregate(min_rating=Min('rating'), max_rating=Max('rating'),
                                                      contests=Count('contest')))
         return context
@@ -196,7 +197,7 @@ class UserPerformancePointsAjax(UserProblemsPage):
         httpresp.render()
 
         return JsonResponse({
-            'results': httpresp.content,
+            'results': utf8text(httpresp.content),
             'has_more': self.has_more,
         })
 
@@ -262,7 +263,7 @@ def edit_profile(request):
 
 class UserList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ListView):
     model = Profile
-    title = ugettext_lazy('Leaderboard')
+    title = gettext_lazy('Leaderboard')
     context_object_name = 'users'
     template_name = 'user/list.html'
     paginate_by = 100
@@ -271,8 +272,8 @@ class UserList(QueryStringSortMixin, DiggPaginatorMixin, TitleMixin, ListView):
     default_sort = '-performance_points'
 
     def get_queryset(self):
-        return (Profile.objects.order_by(self.order, 'id').select_related('user')
-                .only('display_rank', 'user__username', 'name', 'points', 'rating', 'performance_points',
+        return (Profile.objects.filter(is_unlisted=False).order_by(self.order, 'id').select_related('user')
+                .only('display_rank', 'user__username', 'points', 'rating', 'performance_points',
                       'problem_count'))
 
     def get_context_data(self, **kwargs):
@@ -301,8 +302,8 @@ def user_ranking_redirect(request):
     except KeyError:
         raise Http404()
     user = get_object_or_404(Profile, user__username=username)
-    rank = Profile.objects.filter(performance_points__gt=user.performance_points).count()
-    rank += Profile.objects.filter(performance_points__exact=user.performance_points, id__lt=user.id).count()
+    rank = Profile.objects.filter(is_unlisted=False, performance_points__gt=user.performance_points).count()
+    rank += Profile.objects.filter(is_unlisted=False, performance_points__exact=user.performance_points, id__lt=user.id).count()
     page = rank // UserList.paginate_by
     return HttpResponseRedirect('%s%s#!%s' % (reverse('user_list'), '?page=%d' % (page + 1) if page else '', username))
 

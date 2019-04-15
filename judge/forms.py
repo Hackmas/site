@@ -9,7 +9,7 @@ from django.core.validators import RegexValidator
 from django.db.models import Q
 from django.forms import ModelForm, CharField, TextInput, Form
 from django.urls import reverse_lazy
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from django_ace import AceWidget
 from judge.models import Organization, Profile, Submission, PrivateMessage, Language
@@ -18,8 +18,8 @@ from judge.widgets import MathJaxPagedownWidget, HeavyPreviewPageDownWidget, Pag
     Select2Widget, Select2MultipleWidget
 
 
-def fix_unicode(string, unsafe=tuple(u'\u202a\u202b\u202d\u202e')):
-    return string + (sum(k in unsafe for k in string) - string.count(u'\u202c')) * u'\u202c'
+def fix_unicode(string, unsafe=tuple('\u202a\u202b\u202d\u202e')):
+    return string + (sum(k in unsafe for k in string) - string.count('\u202c')) * '\u202c'
 
 
 class ProfileForm(ModelForm):
@@ -29,9 +29,8 @@ class ProfileForm(ModelForm):
 
     class Meta:
         model = Profile
-        fields = ['name', 'about', 'organizations', 'timezone', 'language', 'ace_theme', 'user_script']
+        fields = ['about', 'organizations', 'timezone', 'language', 'ace_theme', 'user_script']
         widgets = {
-            'name': TextInput(attrs={'style': 'width:100%;box-sizing:border-box'}),
             'user_script': AceWidget(theme='github'),
             'timezone': Select2Widget(attrs={'style': 'width:200px'}),
             'language': Select2Widget(attrs={'style': 'width:200px'}),
@@ -51,7 +50,7 @@ class ProfileForm(ModelForm):
 
     def clean(self):
         organizations = self.cleaned_data.get('organizations') or []
-        max_orgs = getattr(settings, 'MAX_USER_ORGANIZATION_COUNT', 3)
+        max_orgs = getattr(settings, 'DMOJ_USER_MAX_ORGANIZATION_COUNT', 3)
 
         if sum(org.is_open for org in organizations) > max_orgs:
             raise ValidationError(_('You may not be part of more than {count} public organizations.').format(count=max_orgs))
@@ -66,9 +65,6 @@ class ProfileForm(ModelForm):
             self.fields['organizations'].queryset = Organization.objects.filter(
                 Q(is_open=True) | Q(id__in=user.profile.organizations.all())
             )
-
-    def clean_name(self):
-        return fix_unicode(self.cleaned_data['name'] or '')
 
 
 class ProblemSubmitForm(ModelForm):

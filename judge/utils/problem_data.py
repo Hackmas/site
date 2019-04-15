@@ -6,8 +6,8 @@ import yaml
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
-from django.core.urlresolvers import reverse
-from django.utils.translation import ugettext as _
+from django.urls import reverse
+from django.utils.translation import gettext as _
 
 if os.altsep:
     def split_path_first(path, repath=re.compile('[%s]' % re.escape(os.sep + os.altsep))):
@@ -19,7 +19,7 @@ else:
 
 class ProblemDataStorage(FileSystemStorage):
     def __init__(self):
-        super(ProblemDataStorage, self).__init__(getattr(settings, 'PROBLEM_DATA_ROOT', None))
+        super(ProblemDataStorage, self).__init__(getattr(settings, 'DMOJ_PROBLEM_DATA_ROOT', None))
 
     def url(self, name):
         path = split_path_first(name)

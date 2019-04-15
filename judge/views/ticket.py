@@ -15,7 +15,7 @@ from django.urls import reverse_lazy
 from django.utils.functional import cached_property
 from django.utils.html import escape, format_html, linebreaks
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext_lazy, ugettext as _
+from django.utils.translation import gettext_lazy, gettext as _
 from django.views import View
 from django.views.generic import FormView, ListView
 from django.views.generic.detail import SingleObjectMixin
@@ -34,7 +34,7 @@ ticket_widget = (forms.Textarea() if HeavyPreviewPageDownWidget is None else
 
 
 class TicketForm(forms.Form):
-    title = forms.CharField(max_length=100, label=ugettext_lazy('Ticket title'))
+    title = forms.CharField(max_length=100, label=gettext_lazy('Ticket title'))
     body = forms.CharField(widget=ticket_widget)
 
     def __init__(self, request, *args, **kwargs):
@@ -103,7 +103,7 @@ class NewProblemTicketView(TitleMixin, NewTicketView):
 
     def get_content_title(self):
         return mark_safe(escape(_('New ticket for %s')) %
-                         format_html(u'<a href="{0}">{1}</a>', reverse('problem_detail', args=[self.object.code]),
+                         format_html('<a href="{0}">{1}</a>', reverse('problem_detail', args=[self.object.code]),
                                      self.object.translated_name(self.request.LANGUAGE_CODE)))
 
 
@@ -288,9 +288,11 @@ class ProblemTicketListView(TicketList):
         if 'problem' not in self.kwargs:
             raise Http404()
         problem = Problem.objects.get(code=self.kwargs['problem'])
-        if not self.request.user.is_authenticated or not problem.is_editable_by(self.request.user):
-            raise Http404()
-        return problem.tickets.all()
+        if problem.is_editable_by(self.request.user):
+            return problem.tickets.all()
+        elif problem.is_accessible_by(self.request.user):
+            return problem.tickets.filter(own_ticket_filter(self.profile.id))
+        raise Http404()
 
 
 class TicketListDataAjax(TicketMixin, SingleObjectMixin, View):

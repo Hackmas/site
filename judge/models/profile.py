@@ -8,7 +8,7 @@ from django.db import models
 from django.db.models import Max
 from django.utils.functional import cached_property
 from django.utils.timezone import now
-from django.utils.translation import ugettext_lazy as _, pgettext
+from django.utils.translation import gettext_lazy as _, pgettext
 from fernet_fields import EncryptedCharField
 from sortedm2m.fields import SortedManyToManyField
 
@@ -47,14 +47,14 @@ class Organization(models.Model):
                                    verbose_name=_('access code'), null=True, blank=True)
 
     def __contains__(self, item):
-        if isinstance(item, (int, long)):
+        if isinstance(item, int):
             return self.members.filter(id=item).exists()
         elif isinstance(item, Profile):
             return self.members.filter(id=item.id).exists()
         else:
             raise TypeError('Organization membership test must be Profile or primany key')
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def get_absolute_url(self):
@@ -75,7 +75,6 @@ class Organization(models.Model):
 
 class Profile(models.Model):
     user = models.OneToOneField(User, verbose_name=_('user associated'))
-    name = models.CharField(max_length=50, verbose_name=_('display name'), null=True, blank=True)
     about = models.TextField(verbose_name=_('self-description'), null=True, blank=True)
     timezone = models.CharField(max_length=50, verbose_name=_('location'), choices=TIMEZONE,
                                 default=getattr(settings, 'DEFAULT_USER_TIME_ZONE', 'America/Toronto'))
@@ -92,6 +91,8 @@ class Profile(models.Model):
                                     choices=(('user', 'Normal User'), ('setter', 'Problem Setter'), ('admin', 'Admin')))
     mute = models.BooleanField(verbose_name=_('comment mute'), help_text=_('Some users are at their best when silent.'),
                                default=False)
+    is_unlisted = models.BooleanField(verbose_name=_('unlisted user'), help_text=_('User will not be ranked.'),
+                                      default=False)
     rating = models.IntegerField(null=True, default=None)
     user_script = models.TextField(verbose_name=_('user script'), default='', blank=True, max_length=65536,
                                    help_text=_('User-defined JavaScript for site customization.'))
@@ -115,13 +116,20 @@ class Profile(models.Model):
         orgs = self.organizations.all()
         return orgs[0] if orgs else None
 
-    def calculate_points(self, table=(lambda x: [pow(x, i) for i in xrange(100)])(getattr(settings, 'PP_STEP', 0.95))):
+    @cached_property
+    def username(self):
+        return self.user.username
+
+    _pp_table = [pow(getattr(settings, 'DMOJ_PP_STEP', 0.95), i) for i in range(getattr(settings, 'DMOJ_PP_ENTRIES', 100))]
+    def calculate_points(self, table=_pp_table):
         from judge.models import Problem
-        data = (Problem.objects.filter(submission__user=self, submission__points__isnull=False, is_public=True, is_organization_private=False)
-                .annotate(max_points=Max('submission__points')).order_by('-max_points')
-                .values_list('max_points', flat=True).filter(max_points__gt=0))
-        extradata = Problem.objects.filter(submission__user=self, submission__result='AC', is_public=True).values('id').distinct().count()
-        bonus_function = getattr(settings, 'PP_BONUS_FUNCTION', lambda n: 300 * (1 - 0.997 ** n))
+        data = (Problem.objects.filter(submission__user=self, submission__points__isnull=False, is_public=True,
+                                       is_organization_private=False)
+                    .annotate(max_points=Max('submission__points')).order_by('-max_points')
+                    .values_list('max_points', flat=True).filter(max_points__gt=0))
+        extradata = Problem.objects.filter(submission__user=self, submission__result='AC', is_public=True) \
+                        .values('id').distinct().count()
+        bonus_function = getattr(settings, 'DMOJ_PP_BONUS_FUNCTION', lambda n: 300 * (1 - 0.997 ** n))
         points = sum(data)
         problems = len(data)
         entries = min(len(data), len(table))
@@ -134,20 +142,6 @@ class Profile(models.Model):
         return points
 
     calculate_points.alters_data = True
-
-    @cached_property
-    def display_name(self):
-        if self.name:
-            return self.name
-        return self.user.username
-
-    @cached_property
-    def long_display_name(self):
-        if self.name:
-            return pgettext('user display name', '%(username)s (%(display)s)') % {
-                'username': self.user.username, 'display': self.name
-            }
-        return self.user.username
 
     def remove_contest(self):
         self.current_contest = None
@@ -165,7 +159,7 @@ class Profile(models.Model):
     def get_absolute_url(self):
         return reverse('user_page', args=(self.user.username,))
 
-    def __unicode__(self):
+    def __str__(self):
         return self.user.username
 
     @classmethod

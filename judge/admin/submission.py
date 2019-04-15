@@ -1,6 +1,7 @@
 from functools import partial
 from operator import itemgetter
 
+from django.conf import settings
 from django.conf.urls import url
 from django.contrib import admin, messages
 from django.core.cache import cache
@@ -9,7 +10,7 @@ from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.utils.html import format_html
-from django.utils.translation import ugettext_lazy as _, pgettext, ugettext, ungettext
+from django.utils.translation import gettext_lazy as _, pgettext, gettext, ungettext
 
 from django_ace import AceWidget
 from judge.models import Submission, SubmissionTestCase, ContestSubmission, ContestParticipation, ContestProblem, \
@@ -98,14 +99,14 @@ class SubmissionAdmin(admin.ModelAdmin):
     list_display = ('id', 'problem_code', 'problem_name', 'user_column', 'execution_time', 'pretty_memory',
                     'points', 'language_column', 'status', 'result', 'judge_column')
     list_filter = ('language', SubmissionStatusFilter, SubmissionResultFilter)
-    search_fields = ('problem__code', 'problem__name', 'user__user__username', 'user__name')
+    search_fields = ('problem__code', 'problem__name', 'user__user__username')
     actions_on_top = True
     actions_on_bottom = True
     inlines = [SubmissionTestCaseInline, ContestSubmissionInline]
 
     def get_queryset(self, request):
         queryset = Submission.objects.select_related('problem', 'user__user', 'language').only(
-            'problem__code', 'problem__name', 'user__user__username', 'user__name', 'language__name',
+            'problem__code', 'problem__name', 'user__user__username', 'language__name',
             'time', 'memory', 'points', 'status', 'result'
         )
         use_straight_join(queryset)
@@ -124,14 +125,18 @@ class SubmissionAdmin(admin.ModelAdmin):
             return True
         return obj.problem.is_editor(request.user.profile)
 
+    def lookup_allowed(self, key, value):
+        return super(SubmissionAdmin, self).lookup_allowed(key, value) or key in ('problem__code',)
+
     def judge(self, request, queryset):
         if not request.user.has_perm('judge.rejudge_submission') or not request.user.has_perm('judge.edit_own_problem'):
-            self.message_user(request, ugettext('You do not have the permission to rejudge submissions.'),
+            self.message_user(request, gettext('You do not have the permission to rejudge submissions.'),
                               level=messages.ERROR)
             return
         queryset = queryset.order_by('id')
-        if queryset.count() > 10 and not request.user.has_perm('judge.rejudge_submission_lot'):
-            self.message_user(request, ugettext('You do not have the permission to rejudge THAT many submissions.'),
+        if not request.user.has_perm('judge.rejudge_submission_lot') and \
+                queryset.count() > getattr(settings, 'DMOJ_SUBMISSIONS_REJUDGE_LIMIT', 10):
+            self.message_user(request, gettext('You do not have the permission to rejudge THAT many submissions.'),
                               level=messages.ERROR)
             return
         if not request.user.has_perm('judge.edit_all_problem'):
@@ -140,14 +145,14 @@ class SubmissionAdmin(admin.ModelAdmin):
         judged = len(queryset)
         for model in queryset:
             model.judge(rejudge=True)
-        self.message_user(request, ungettext('%d submission were successfully scheduled for rejudging.',
+        self.message_user(request, ungettext('%d submission was successfully scheduled for rejudging.',
                                              '%d submissions were successfully scheduled for rejudging.',
                                              judged) % judged)
     judge.short_description = _('Rejudge the selected submissions')
 
     def recalculate_score(self, request, queryset):
         if not request.user.has_perm('judge.rejudge_submission'):
-            self.message_user(request, ugettext('You do not have the permission to rejudge submissions.'),
+            self.message_user(request, gettext('You do not have the permission to rejudge submissions.'),
                               level=messages.ERROR)
             return
         submissions = list(queryset.defer(None).select_related(None).select_related('problem')
@@ -158,14 +163,7 @@ class SubmissionAdmin(admin.ModelAdmin):
             if not submission.problem.partial and submission.points < submission.problem.points:
                 submission.points = 0
             submission.save()
-
-            if hasattr(submission, 'contest'):
-                contest = submission.contest
-                contest.points = round(submission.case_points / submission.case_total * contest.problem.points
-                                       if submission.case_total > 0 else 0, 1)
-                if not contest.problem.partial and contest.points < contest.problem.points:
-                    contest.points = 0
-                contest.save()
+            submission.update_contest()
 
         for profile in Profile.objects.filter(id__in=queryset.values_list('user_id', flat=True).distinct()):
             profile.calculate_points()
@@ -173,8 +171,8 @@ class SubmissionAdmin(admin.ModelAdmin):
             cache.delete('user_attempted:%d' % profile.id)
 
         for participation in ContestParticipation.objects.filter(
-                id__in=queryset.values_list('contest__participation_id')):
-            participation.recalculate_score()
+                id__in=queryset.values_list('contest__participation_id')).prefetch_related('contest'):
+            participation.recompute_results()
 
         self.message_user(request, ungettext('%d submission were successfully rescored.',
                                              '%d submissions were successfully rescored.',
@@ -192,9 +190,7 @@ class SubmissionAdmin(admin.ModelAdmin):
     problem_name.admin_order_field = 'problem__name'
 
     def user_column(self, obj):
-        return format_html(u'<span title="{display}">{username}</span>',
-                           username=obj.user.user.username,
-                           display=obj.user.name)
+        return obj.user.user.username
     user_column.admin_order_field = 'user__user__username'
     user_column.short_description = _('User')
 
@@ -206,11 +202,11 @@ class SubmissionAdmin(admin.ModelAdmin):
     def pretty_memory(self, obj):
         memory = obj.memory
         if memory is None:
-            return ugettext('None')
+            return gettext('None')
         if memory < 1000:
-            return ugettext('%d KB') % memory
+            return gettext('%d KB') % memory
         else:
-            return ugettext('%.2f MB') % (memory / 1024.)
+            return gettext('%.2f MB') % (memory / 1024)
     pretty_memory.admin_order_field = 'memory'
     pretty_memory.short_description = _('Memory')
 

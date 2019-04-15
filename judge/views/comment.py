@@ -4,9 +4,9 @@ from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.forms.models import ModelForm
-from django.http import HttpResponseForbidden, HttpResponseBadRequest, HttpResponse, Http404, HttpResponseRedirect
+from django.http import HttpResponseForbidden, HttpResponseBadRequest, HttpResponse, Http404
 from django.shortcuts import get_object_or_404
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 from django.views.generic import DetailView, UpdateView
 from reversion import revisions
@@ -32,6 +32,10 @@ def vote_comment(request, delta):
     if 'id' not in request.POST:
         return HttpResponseBadRequest()
 
+    if not request.user.is_staff and not request.profile.submission_set.filter(points=F('problem__points')).exists():
+        return HttpResponseBadRequest(_('You must solve at least one problem before you can vote.'),
+                                      content_type='text/plain')
+
     try:
         comment_id = int(request.POST['id'])
     except ValueError:
@@ -42,7 +46,7 @@ def vote_comment(request, delta):
 
     vote = CommentVote()
     vote.comment_id = comment_id
-    vote.voter = request.user.profile
+    vote.voter = request.profile
     vote.score = delta
 
     while True:
@@ -51,7 +55,7 @@ def vote_comment(request, delta):
         except IntegrityError:
             with LockModel(write=(CommentVote,)):
                 try:
-                    vote = CommentVote.objects.get(comment_id=comment_id, voter=request.user.profile)
+                    vote = CommentVote.objects.get(comment_id=comment_id, voter=request.profile)
                 except CommentVote.DoesNotExist:
                     # We must continue racing in case this is exploited to manipulate votes.
                     continue
